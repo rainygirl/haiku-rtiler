@@ -1,0 +1,15 @@
+resource app_signature "application/x-vnd.RTiler";
+
+/* B_SINGLE_LAUNCH: running the binary installs (or reinstalls) the tray item
+   and exits, so there is nothing to keep a second copy around for. */
+resource app_flags B_SINGLE_LAUNCH;
+
+resource app_version {
+	major  = 1,
+	middle = 0,
+	minor  = 0,
+	variety = B_APPV_FINAL,
+	internal = 0,
+	short_info = "R Tiler",
+	long_info  = "Deskbar tray item that lays the open windows out on screen."
+};
