@@ -14,7 +14,20 @@ Built for a short, wide panel — a Sony VAIO P is 1600×768 — so the layouts 
 
 Haiku OS (x86 or x86_64). Build it on the machine you are going to run it on — no cross-compiler needed.
 
-## Install
+Also builds and runs on arm64, cross-compiled against the Haiku kits; it needs nothing outside them.
+
+## Install with pkgman
+
+| Haiku | Commands |
+| --- | --- |
+| 32-bit x86 (x86_gcc2) | `pkgman add-repo https://pkgman.rainygirl.com/x86_gcc2`<br>`pkgman install rtiler` |
+| arm64 | `pkgman add-repo http://pkgman.rainygirl.com/arm64`<br>`pkgman install rtiler` |
+
+Then start **R Tiler** once from Deskbar -> Applications to put the icon into the tray.
+
+If `pkgman add-repo` fails with `Operation not supported`, the network kit of that image has no TLS; use `http://` instead of `https://` in the address.
+
+## Install from source
 
 ```sh
 ./install.sh
