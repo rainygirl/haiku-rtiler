@@ -43,7 +43,15 @@ This compiles it, puts the binary in `~/config/non-packaged/apps/`, adds it to *
 ## Using it
 
 - **Click** the tray icon to tile automatically.
-- **Right-click** for the layouts: two columns, three columns, grid, maximize all, and **Undo**, which puts every window back where it was before the last tiling.
+- **Right-click** for the layouts: two columns, three columns, grid, maximize all, **Line up by title**, and **Undo**, which puts every window back where it was before the last tiling.
+- **Line up by title** gives every window the whole screen and staggers them by the width of their own title tab, so the BeOS tabs come out in a row across the top the way a browser's tabs do. Click a tab to bring that window up. The strip may take up to half the width; past that the tabs squeeze together.
+
+![Line up by title: three windows at full size, their title tabs in a row across the top](screenshots/tabs.png)
+
+- **Grid** puts them in two rows of two.
+
+![Grid: four windows in two rows of two](screenshots/grid.png)
+
 - It can also be driven from a shell or a keyboard shortcut:
 
 ```sh
@@ -52,6 +60,7 @@ This compiles it, puts the binary in `~/config/non-packaged/apps/`, adds it to *
 "R Tiler" --tile 3        # three columns
 "R Tiler" --tile grid     # 2 x 2
 "R Tiler" --tile max      # maximize all
+"R Tiler" --tile tabs     # one row of title tabs
 "R Tiler" --remove        # take the item out of the Deskbar
 ```
 

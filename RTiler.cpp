@@ -20,6 +20,7 @@
 #include <Application.h>
 #include <Autolock.h>
 #include <Deskbar.h>
+#include <Font.h>
 #include <List.h>
 #include <Locker.h>
 #include <LocaleRoster.h>
@@ -60,11 +61,18 @@ static const bigtime_t kReplyTimeout = 400000;
 static const float kMargin		= 5.0f;
 static const float kTabHeight	= 26.0f;
 
+// Bounds on the room one window may claim in the tab strip: no title may run
+// away with the width, and no tab may shrink to nothing once there are more
+// windows than fit across.
+static const float kMinTabStep	= 24.0f;
+static const float kMaxTabStep	= 240.0f;
+
 static const uint32 kMsgLayoutAuto		= 'lyat';
 static const uint32 kMsgLayoutTwo		= 'ly02';
 static const uint32 kMsgLayoutThree		= 'ly03';
 static const uint32 kMsgLayoutGrid		= 'lygr';
 static const uint32 kMsgLayoutMaximize	= 'lymx';
+static const uint32 kMsgLayoutTabs		= 'lytb';
 static const uint32 kMsgRestore			= 'lyrs';
 static const uint32 kMsgQuit			= 'lyqt';
 
@@ -73,35 +81,38 @@ static const uint32 kMsgQuit			= 'lyqt';
 
 
 enum string_id {
-	kStrAuto = 0, kStrTwo, kStrThree, kStrGrid, kStrMaximize, kStrRestore,
-	kStrQuit, kStrTip,
+	kStrAuto = 0, kStrTwo, kStrThree, kStrGrid, kStrMaximize, kStrTabs,
+	kStrRestore, kStrQuit, kStrTip,
 	kStringCount
 };
 
 static const char* const kStringsEn[kStringCount] = {
 	"Tile automatically", "Two columns", "Three columns", "Grid",
-	"Maximize all", "Undo", "Remove from Deskbar", "Tile windows"
+	"Maximize all", "Line up by title", "Undo", "Remove from Deskbar",
+	"Tile windows"
 };
 
 static const char* const kStringsKo[kStringCount] = {
 	"자동 배치", "2단", "3단", "격자",
-	"모두 최대화", "되돌리기", "Deskbar에서 제거", "창 배치"
+	"모두 최대화", "타이틀로 정렬", "되돌리기", "Deskbar에서 제거", "창 배치"
 };
 
 static const char* const kStringsJa[kStringCount] = {
 	"自動整列", "2列", "3列", "グリッド",
-	"すべて最大化", "元に戻す", "Deskbar から削除", "ウィンドウを整列"
+	"すべて最大化", "タイトルで整列", "元に戻す", "Deskbar から削除",
+	"ウィンドウを整列"
 };
 
 static const char* const kStringsDe[kStringCount] = {
 	"Automatisch anordnen", "Zwei Spalten", "Drei Spalten", "Raster",
-	"Alle maximieren", "Rückgängig", "Aus dem Deskbar entfernen",
-	"Fenster anordnen"
+	"Alle maximieren", "Nach Titel anordnen", "Rückgängig",
+	"Aus dem Deskbar entfernen", "Fenster anordnen"
 };
 
 static const char* const kStringsFr[kStringCount] = {
 	"Disposer automatiquement", "Deux colonnes", "Trois colonnes", "Grille",
-	"Tout agrandir", "Annuler", "Retirer du Deskbar", "Disposer les fenêtres"
+	"Tout agrandir", "Aligner par titre", "Annuler", "Retirer du Deskbar",
+	"Disposer les fenêtres"
 };
 
 static const char* const* sStrings = kStringsEn;
@@ -148,6 +159,8 @@ struct window_ref {
 	team_id	team;
 	int32	index;
 	BRect	frame;
+	float	tab;	// room the decorator's tab needs; only the tab layout
+					// fills this in
 };
 
 
@@ -185,6 +198,47 @@ set_window_frame(const BMessenger& messenger, int32 index, BRect frame)
 	BMessage reply;
 	return messenger.SendMessage(&request, &reply, kSendTimeout, kReplyTimeout)
 		== B_OK;
+}
+
+
+static bool
+activate_window(const BMessenger& messenger, int32 index)
+{
+	BMessage request(B_SET_PROPERTY);
+	request.AddBool("data", true);
+	request.AddSpecifier("Active");
+	request.AddSpecifier("Window", index);
+
+	BMessage reply;
+	return messenger.SendMessage(&request, &reply, kSendTimeout, kReplyTimeout)
+		== B_OK;
+}
+
+
+// How much room this window's tab takes along the top. TabFrame is the
+// decorator's own measurement, so nothing here has to guess at the metrics --
+// but it is only worth having once the window is at its final width, because
+// the tab is clipped to the window, and a system old enough not to answer at
+// all falls back to measuring the title the way the decorator does: the text
+// plus the close and zoom buttons, which are square and as tall as the tab.
+static float
+tab_step(const BMessenger& messenger, int32 index)
+{
+	BMessage reply;
+	if (get_window_property(messenger, index, "TabFrame", &reply)) {
+		BRect tab;
+		if (reply.FindRect("result", &tab) == B_OK && tab.IsValid())
+			return tab.Width() + 1;
+	}
+
+	reply.MakeEmpty();
+	const char* title = NULL;
+	if (get_window_property(messenger, index, "Title", &reply)
+		&& reply.FindString("result", &title) == B_OK && title != NULL) {
+		return be_plain_font->StringWidth(title) + 3 * kTabHeight;
+	}
+
+	return 4 * kTabHeight;
 }
 
 
@@ -303,6 +357,7 @@ collect_windows(BList* into)
 			ref->team = team;
 			ref->index = w;
 			ref->frame = frame;
+			ref->tab = 0;
 			into->AddItem(ref);
 		}
 	}
@@ -403,6 +458,77 @@ auto_layout(BList* windows)
 	if (columns > 4)
 		columns = 4;
 	grid_layout(windows, columns, 2);
+}
+
+
+// Every window gets the whole work area, then is pushed right by the tabs of
+// the windows before it. The decorator draws a window's tab at its own left
+// edge, so what comes out is a row of titles across the top of what is
+// otherwise a stack of full-screen windows -- the BeOS tab doing the work a
+// browser's tab strip does. Activating them left to right keeps that row
+// readable: a window covers the bodies to its left, never their tabs.
+static void
+tabs_layout(BList* windows)
+{
+	int32 count = windows->CountItems();
+	if (count <= 0)
+		return;
+
+	BRect area = work_area();
+	BRect full = area;
+	full.InsetBy(kMargin, kMargin);
+	full.top += kTabHeight;
+
+	// Measured after this move rather than before it: the decorator clips the
+	// tab to the window, so a narrow window reports a tab narrower than the
+	// one it will draw at full width.
+	for (int32 i = 0; i < count; i++) {
+		window_ref* ref = (window_ref*)windows->ItemAt(i);
+		BMessenger messenger(NULL, ref->team);
+		set_window_frame(messenger, ref->index, full);
+	}
+
+	float total = 0;
+	for (int32 i = 0; i < count; i++) {
+		window_ref* ref = (window_ref*)windows->ItemAt(i);
+		BMessenger messenger(NULL, ref->team);
+
+		float step = tab_step(messenger, ref->index);
+		if (step > kMaxTabStep)
+			step = kMaxTabStep;
+		if (step < kMinTabStep)
+			step = kMinTabStep;
+
+		ref->tab = step;
+		total += step;
+	}
+
+	// The strip may not eat the screen: past half the width the tabs squeeze
+	// together the way a browser's do. Half rather than less, because a
+	// narrower budget starts cutting titles while there is still plenty of
+	// room -- four windows on a 1024 px screen already overflow a third of it
+	// -- and the frontmost window keeps half the screen either way.
+	float budget = (area.Width() + 1) / 2;
+	float scale = total > budget && total > 0 ? budget / total : 1.0f;
+
+	float cursor = 0;
+	for (int32 i = 0; i < count; i++) {
+		window_ref* ref = (window_ref*)windows->ItemAt(i);
+
+		BRect frame = full;
+		frame.left += cursor;
+		// More windows than the strip can hold: the last of them still get a
+		// window, even if only a sliver of one.
+		if (frame.left > frame.right - kMinTabStep)
+			frame.left = frame.right - kMinTabStep;
+
+		BMessenger messenger(NULL, ref->team);
+		set_window_frame(messenger, ref->index, frame);
+		activate_window(messenger, ref->index);
+
+		float step = ref->tab * scale;
+		cursor += step < kMinTabStep ? kMinTabStep : step;
+	}
 }
 
 
@@ -549,6 +675,7 @@ RTilerView::MouseDown(BPoint where)
 	menu->AddItem(new BMenuItem(T(kStrGrid), new BMessage(kMsgLayoutGrid)));
 	menu->AddItem(new BMenuItem(T(kStrMaximize),
 		new BMessage(kMsgLayoutMaximize)));
+	menu->AddItem(new BMenuItem(T(kStrTabs), new BMessage(kMsgLayoutTabs)));
 	menu->AddSeparatorItem();
 	menu->AddItem(new BMenuItem(T(kStrRestore), new BMessage(kMsgRestore)));
 	menu->AddSeparatorItem();
@@ -652,6 +779,9 @@ RTilerView::_Work(uint32 what)
 		case kMsgLayoutMaximize:
 			grid_layout(&windows, 1, 1);
 			break;
+		case kMsgLayoutTabs:
+			tabs_layout(&windows);
+			break;
 		case kMsgLayoutAuto:
 		default:
 			auto_layout(&windows);
@@ -752,6 +882,8 @@ main(int argc, char** argv)
 			grid_layout(&windows, 2, 2);
 		else if (strcmp(mode, "max") == 0)
 			grid_layout(&windows, 1, 1);
+		else if (strcmp(mode, "tabs") == 0)
+			tabs_layout(&windows);
 		else
 			auto_layout(&windows);
 
